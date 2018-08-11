@@ -106,7 +106,7 @@ class DomainTransferNet(object):
         return x
 
 
-    def f(self, x, bn=False):
+    def f(self, x, bn=True):
         with tf.variable_scope("f", reuse=tf.AUTO_REUSE):
             x = tf.image.grayscale_to_rgb(x) if x.get_shape()[3] == 1 else x                        # (batch_size, 32, 32,   3)
             x = self.conv_bn(x,  64, [3, 3], 2,  "same", tf.nn.relu, bn, "conv1", self.is_training) # (batch_size, 16, 16,  64)
@@ -116,7 +116,7 @@ class DomainTransferNet(object):
             return x
 
                 
-    def g(self, x, bn=False):
+    def g(self, x, bn=True):
         with tf.variable_scope("g", reuse=tf.AUTO_REUSE):
             x = self.conv_t_bn(x, 512, [4, 4], 2, "valid", tf.nn.relu, bn,    "conv_t1", self.is_training) # (batch_size,  4,  4, 512)
             x = self.conv_t_bn(x, 256, [3, 3], 2,  "same", tf.nn.relu, bn,    "conv_t2", self.is_training) # (batch_size,  8,  8, 256)
@@ -129,7 +129,7 @@ class DomainTransferNet(object):
         return self.g(self.f(x))
 
     
-    def D(self, x, bn=False):
+    def D(self, x, bn=True):
         with tf.variable_scope("D", reuse=tf.AUTO_REUSE):
             x = self.conv_bn(x, 128, [3, 3], 2,  "same", tf.nn.relu, bn,    "conv1", self.is_training) # (batch_size, 16, 16, 128)
             x = self.conv_bn(x, 256, [3, 3], 2,  "same", tf.nn.relu, bn,    "conv2", self.is_training) # (batch_size,  8,  8, 256)
@@ -154,9 +154,9 @@ class DomainTransferNet(object):
 
         # train op
         optimizer = tf.train.AdamOptimizer(self.params["learning_rate"])
-        # update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-        # with tf.control_dependencies(update_ops):
-        self.train_op_auxiliary = optimizer.minimize(self.loss_auxiliary)
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops):
+            self.train_op_auxiliary = optimizer.minimize(self.loss_auxiliary)
 
         # summary op
         summary_loss = tf.summary.scalar("loss_auxiliary", self.loss_auxiliary)
@@ -207,18 +207,18 @@ class DomainTransferNet(object):
         with tf.variable_scope("xs", reuse=False):
             optimizer_d_xs = tf.train.AdamOptimizer(self.params["learning_rate"])
             optimizer_g_xs = tf.train.AdamOptimizer(self.params["learning_rate"])
-            # update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-            # with tf.control_dependencies(update_ops):
-            self.train_op_d_xs = optimizer_d_xs.minimize(self.loss_D_xs, var_list=d_vars)
-            self.train_op_g_xs = optimizer_g_xs.minimize(self.loss_G_xs, var_list=g_vars)
+            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            with tf.control_dependencies(update_ops):
+                self.train_op_d_xs = optimizer_d_xs.minimize(self.loss_D_xs, var_list=d_vars)
+                self.train_op_g_xs = optimizer_g_xs.minimize(self.loss_G_xs, var_list=g_vars)
 
         with tf.variable_scope("xt", reuse=False):
             optimizer_d_xt = tf.train.AdamOptimizer(self.params["learning_rate"])
             optimizer_g_xt = tf.train.AdamOptimizer(self.params["learning_rate"])
-            # update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-            # with tf.control_dependencies(update_ops):
-            self.train_op_d_xt = optimizer_d_xt.minimize(self.loss_D_xt, var_list=d_vars)
-            self.train_op_g_xt = optimizer_g_xt.minimize(self.loss_G_xt, var_list=g_vars)
+            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            with tf.control_dependencies(update_ops):
+                self.train_op_d_xt = optimizer_d_xt.minimize(self.loss_D_xt, var_list=d_vars)
+                self.train_op_g_xt = optimizer_g_xt.minimize(self.loss_G_xt, var_list=g_vars)
 
         # summary op
         summary_loss_D_xs = tf.summary.scalar("loss_D_xs", self.loss_D_xs)

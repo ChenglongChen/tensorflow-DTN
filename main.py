@@ -11,6 +11,7 @@ SAMPLE_DIR = "./sample"
 
 
 params = {
+    "log_dir": "./log",
     "model_dir": "./model",
     "summary_dir": "./summary",
 
@@ -55,8 +56,9 @@ def main():
 
     # dtn model
     print("init dtn")
-    os_utils._makedirs("./log")
-    logger = log_utils._get_logger("./log", "tf-%s.log" % time_utils._timestamp())
+    os_utils._makedirs(params["summary_dir"], force=True)
+    os_utils._makedirs(params["log_dir"])
+    logger = log_utils._get_logger(params["log_dir"], "tf-%s.log" % time_utils._timestamp())
     model = DomainTransferNet(params, logger)
 
     print("fit dtn")
