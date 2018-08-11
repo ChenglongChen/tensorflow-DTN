@@ -37,11 +37,13 @@ class DomainTransferNet(object):
         self.init_tf_vars()
         self.build_f()
         self.flip_gradient = True if ("flip_gradient" in self.params and self.params["flip_gradient"]) else False
+        # explicit domain adaptation (fine tuning) for f
+        self.f_adaptation = True if ("f_adaptation" in self.params and self.params["f_adaptation"]) else False
         if self.flip_gradient:
             self.build_main_model_with_flip_gradient()
         else:
             self.build_main_model()
-        self.sess, self.saver = self._init_session()
+        self.sess, self.saver = self.init_session()
         self.summary_writer = tf.summary.FileWriter(self.params["summary_dir"], self.sess.graph)
 
 
@@ -54,7 +56,7 @@ class DomainTransferNet(object):
         self.len_xt      = tf.shape(self.xt)[0]
 
 
-    def _init_session(self):
+    def init_session(self):
         config = tf.ConfigProto(device_count={"gpu": 1})
         config.gpu_options.allow_growth = True
         config.intra_op_parallelism_threads = 4
@@ -74,54 +76,54 @@ class DomainTransferNet(object):
         self.saver.restore(self.sess, self.params["offline_model_dir"] + "/self.checkpoint")
 
 
-    def conv_bn(self, x, num_filters, kernel_size, stride, padding, activation, bn, name, is_training):
+    def conv_bn(self, x, num_filters, kernel_size, stride, padding, conv_activation, bn_activation, bn, name):
         x = tf.layers.conv2d(
             inputs=x,
             filters=num_filters,
             kernel_size=kernel_size,
             padding=padding,
-            activation=None,
+            activation=conv_activation,
             strides=stride,
             reuse=tf.AUTO_REUSE,
             name=name)
         if bn:
-            x = tf.layers.BatchNormalization()(x, is_training)
-        x = activation(x)
+            x = tf.layers.BatchNormalization()(x, self.is_training)
+        x = bn_activation(x)
         return x
 
 
-    def conv_t_bn(self, x, num_filters, kernel_size, stride, padding, activation, bn, name, is_training):
+    def conv_t_bn(self, x, num_filters, kernel_size, stride, padding, conv_activation, bn_activation, bn, name):
         x = tf.layers.conv2d_transpose(
             inputs=x,
             filters=num_filters,
             kernel_size=kernel_size,
             padding=padding,
-            activation=None,
+            activation=conv_activation,
             strides=stride,
             reuse=tf.AUTO_REUSE,
             name=name)
         if bn:
-            x = tf.layers.BatchNormalization()(x, is_training)
-        x = activation(x)
+            x = tf.layers.BatchNormalization()(x, self.is_training)
+        x = bn_activation(x)
         return x
 
 
     def f(self, x, bn=True):
         with tf.variable_scope("f", reuse=tf.AUTO_REUSE):
-            x = tf.image.grayscale_to_rgb(x) if x.get_shape()[3] == 1 else x                        # (batch_size, 32, 32,   3)
-            x = self.conv_bn(x,  64, [3, 3], 2,  "same", tf.nn.relu, bn, "conv1", self.is_training) # (batch_size, 16, 16,  64)
-            x = self.conv_bn(x, 128, [3, 3], 2,  "same", tf.nn.relu, bn, "conv2", self.is_training) # (batch_size,  8,  8, 128)
-            x = self.conv_bn(x, 256, [3, 3], 2,  "same", tf.nn.relu, bn, "conv3", self.is_training) # (batch_size,  4,  4, 256)
-            x = self.conv_bn(x, 128, [4, 4], 2, "valid", tf.nn.tanh, bn, "conv4", self.is_training) # (batch_size,  1,  1, 128)
+            x = tf.image.grayscale_to_rgb(x) if x.get_shape()[3] == 1 else x            # (batch_size, 32, 32,   3)
+            x = self.conv_bn(x,  64, [3, 3], 2,  "same", None, tf.nn.relu, bn, "conv1") # (batch_size, 16, 16,  64)
+            x = self.conv_bn(x, 128, [3, 3], 2,  "same", None, tf.nn.relu, bn, "conv2") # (batch_size,  8,  8, 128)
+            x = self.conv_bn(x, 256, [3, 3], 2,  "same", None, tf.nn.relu, bn, "conv3") # (batch_size,  4,  4, 256)
+            x = self.conv_bn(x, 128, [4, 4], 2, "valid", None, tf.nn.tanh, bn, "conv4") # (batch_size,  1,  1, 128)
             return x
 
                 
     def g(self, x, bn=True):
         with tf.variable_scope("g", reuse=tf.AUTO_REUSE):
-            x = self.conv_t_bn(x, 512, [4, 4], 2, "valid", tf.nn.relu, bn,    "conv_t1", self.is_training) # (batch_size,  4,  4, 512)
-            x = self.conv_t_bn(x, 256, [3, 3], 2,  "same", tf.nn.relu, bn,    "conv_t2", self.is_training) # (batch_size,  8,  8, 256)
-            x = self.conv_t_bn(x, 128, [3, 3], 2,  "same", tf.nn.relu, bn,    "conv_t3", self.is_training) # (batch_size, 16, 16, 128)
-            x = self.conv_t_bn(x,   1, [3, 3], 2,  "same", tf.nn.tanh, False, "conv_t4", self.is_training) # (batch_size, 32, 32,   1)
+            x = self.conv_t_bn(x, 512, [4, 4], 2, "valid", None, tf.nn.relu,    bn, "conv_t1") # (batch_size,  4,  4, 512)
+            x = self.conv_t_bn(x, 256, [3, 3], 2,  "same", None, tf.nn.relu,    bn, "conv_t2") # (batch_size,  8,  8, 256)
+            x = self.conv_t_bn(x, 128, [3, 3], 2,  "same", None, tf.nn.relu,    bn, "conv_t3") # (batch_size, 16, 16, 128)
+            x = self.conv_t_bn(x,   1, [3, 3], 2,  "same", None, tf.nn.tanh, False, "conv_t4") # (batch_size, 32, 32,   1)
             return x
         
         
@@ -131,10 +133,10 @@ class DomainTransferNet(object):
     
     def D(self, x, bn=True):
         with tf.variable_scope("D", reuse=tf.AUTO_REUSE):
-            x = self.conv_bn(x, 128, [3, 3], 2,  "same", tf.nn.relu, bn,    "conv1", self.is_training) # (batch_size, 16, 16, 128)
-            x = self.conv_bn(x, 256, [3, 3], 2,  "same", tf.nn.relu, bn,    "conv2", self.is_training) # (batch_size,  8,  8, 256)
-            x = self.conv_bn(x, 512, [3, 3], 2,  "same", tf.nn.relu, bn,    "conv3", self.is_training) # (batch_size,  4,  4, 512)
-            x = self.conv_bn(x,   1, [4, 4], 2, "valid", tf.nn.relu, False, "conv4", self.is_training) # (batch_size,  1,  1,   3)
+            x = self.conv_bn(x, 128, [3, 3], 2,  "same", tf.nn.relu, tf.nn.relu,    bn, "conv1") # (batch_size, 16, 16, 128)
+            x = self.conv_bn(x, 256, [3, 3], 2,  "same",       None, tf.nn.relu,    bn, "conv2") # (batch_size,  8,  8, 256)
+            x = self.conv_bn(x, 512, [3, 3], 2,  "same",       None, tf.nn.relu,    bn, "conv3") # (batch_size,  4,  4, 512)
+            x = self.conv_bn(x,   1, [4, 4], 2, "valid",       None, tf.nn.relu, False, "conv4") # (batch_size,  1,  1,   3)
             x = tf.layers.flatten(x)
             return x
 
@@ -142,7 +144,7 @@ class DomainTransferNet(object):
     def build_f(self):
 
         f_xs = self.f(self.xs)
-        logits = tf.layers.flatten(self.conv_bn(f_xs, 10, [1, 1], 1, "valid", tf.identity, False, "logits", False))
+        logits = tf.layers.flatten(self.conv_bn(f_xs, 10, [1, 1], 1, "valid", None, tf.identity, False, "logits"))
 
         # loss
         self.loss_auxiliary = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -203,6 +205,8 @@ class DomainTransferNet(object):
         t_vars = tf.trainable_variables()
         d_vars = [v for v in t_vars if "D" in v.name]
         g_vars = [v for v in t_vars if "g" in v.name]
+        if self.f_adaptation:
+            g_vars.extend([v for v in t_vars if "f" in v.name])
 
         with tf.variable_scope("xs", reuse=False):
             optimizer_d_xs = tf.train.AdamOptimizer(self.params["learning_rate"])
@@ -282,6 +286,8 @@ class DomainTransferNet(object):
         # train op
         t_vars = tf.trainable_variables()
         d_g_vars = [v for v in t_vars if ("D" in v.name) or ("g" in v.name)]
+        if self.f_adaptation:
+            d_g_vars.extend([v for v in t_vars if ("f" in v.name)])
 
         with tf.variable_scope("all", reuse=False):
             optimizer = tf.train.AdamOptimizer(self.params["learning_rate"])
@@ -410,4 +416,4 @@ class DomainTransferNet(object):
             merged = self.merge_images(xs, g_f_xs, batch_size)
             path = os.path.join(sample_dir, "sample-%d-to-%d.png" %(i*batch_size, (i+1)*batch_size))
             imsave(path, merged)
-            self.logger.info("saved %s" %path)
+            self.logger.info("saved %s" % path)

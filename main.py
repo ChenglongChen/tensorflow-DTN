@@ -29,6 +29,7 @@ params = {
 
 
     "flip_gradient": False,
+    "f_adaptation": True,
 
 }
 

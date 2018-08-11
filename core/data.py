@@ -13,10 +13,20 @@ class DataLoader(object):
     """
 
     @staticmethod
+    def normalize(images):
+        """
+        :param images: in range [0, 255]
+        :return: in range [-1, 1]
+        """
+        return 2. * (images / 255.) - 1.
+
+
+    @staticmethod
     def load_svhn(image_dir, image_file):
         image_dir = os.path.join(image_dir, image_file)
         svhn = loadmat(image_dir)
-        images = np.transpose(svhn['X'], [3, 0, 1, 2]) / 127.5 - 1
+        images = np.transpose(svhn['X'], [3, 0, 1, 2])
+        images = DataLoader.normalize(images)
         labels = svhn['y'].reshape(-1)
         labels[np.where(labels == 10)] = 0
         return images, labels
@@ -56,5 +66,5 @@ class DataLoader(object):
     def load_mnist(image_dir, split="train"):
         with open(os.path.join(image_dir, split+".pkl"), "rb") as f:
             images, labels = pkl.load(f)
-        images /= 127.5 - 1
+        images = DataLoader.normalize(images)
         return images, labels
