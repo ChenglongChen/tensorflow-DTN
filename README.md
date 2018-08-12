@@ -2,8 +2,11 @@
 
 A Tensorflow implementation of Domain Transfer Network [1].
 
+![sample](./fig/sample-900-to-1000.png)
 
+# Usage
 To train the model:
+
 ```
 cd data/
 chmod +x download.sh & ./download.sh

@@ -36,10 +36,10 @@ class DomainTransferNet(object):
         self.logger = logger
         self.init_tf_vars()
         self.build_f()
-        self.flip_gradient = True if ("flip_gradient" in self.params and self.params["flip_gradient"]) else False
+        self.flip_gradient_flag = True if ("flip_gradient" in self.params and self.params["flip_gradient"]) else False
         # explicit domain adaptation (fine tuning) for f
-        self.f_adaptation = True if ("f_adaptation" in self.params and self.params["f_adaptation"]) else False
-        if self.flip_gradient:
+        self.f_adaptation_flag = True if ("f_adaptation" in self.params and self.params["f_adaptation"]) else False
+        if self.flip_gradient_flag:
             self.build_main_model_with_flip_gradient()
         else:
             self.build_main_model()
@@ -69,82 +69,98 @@ class DomainTransferNet(object):
 
 
     def save_session(self):
-        self.saver.save(self.sess, self.params["offline_model_dir"] + "/self.checkpoint")
+        self.saver.save(self.sess, self.params["model_dir"] + "/model.checkpoint")
 
 
     def restore_session(self):
-        self.saver.restore(self.sess, self.params["offline_model_dir"] + "/self.checkpoint")
+        self.saver.restore(self.sess, self.params["model_dir"] + "/model.checkpoint")
 
 
-    def conv_bn(self, x, num_filters, kernel_size, stride, padding, conv_activation, bn_activation, bn, name):
+    def conv_bn(self, x, num_filters, kernel_size, stride, padding, activation, bn, name):
         x = tf.layers.conv2d(
             inputs=x,
             filters=num_filters,
             kernel_size=kernel_size,
             padding=padding,
-            activation=conv_activation,
+            activation=None,
             strides=stride,
             reuse=tf.AUTO_REUSE,
             name=name)
         if bn:
             x = tf.layers.BatchNormalization()(x, self.is_training)
-        x = bn_activation(x)
+        x = activation(x)
         return x
 
 
-    def conv_t_bn(self, x, num_filters, kernel_size, stride, padding, conv_activation, bn_activation, bn, name):
+    def conv_t_bn(self, x, num_filters, kernel_size, stride, padding, activation, bn, name):
         x = tf.layers.conv2d_transpose(
             inputs=x,
             filters=num_filters,
             kernel_size=kernel_size,
             padding=padding,
-            activation=conv_activation,
+            activation=None,
             strides=stride,
             reuse=tf.AUTO_REUSE,
             name=name)
         if bn:
             x = tf.layers.BatchNormalization()(x, self.is_training)
-        x = bn_activation(x)
+        x = activation(x)
         return x
 
 
-    def f(self, x, bn=True):
+    def f(self, x, bn=False, activation=tf.nn.relu):
+        """
+        use tanh as the last layer to normalize the feature representation to [-1, 1] for computing the distance loss
+        """
         with tf.variable_scope("f", reuse=tf.AUTO_REUSE):
-            x = tf.image.grayscale_to_rgb(x) if x.get_shape()[3] == 1 else x            # (batch_size, 32, 32,   3)
-            x = self.conv_bn(x,  64, [3, 3], 2,  "same", None, tf.nn.relu, bn, "conv1") # (batch_size, 16, 16,  64)
-            x = self.conv_bn(x, 128, [3, 3], 2,  "same", None, tf.nn.relu, bn, "conv2") # (batch_size,  8,  8, 128)
-            x = self.conv_bn(x, 256, [3, 3], 2,  "same", None, tf.nn.relu, bn, "conv3") # (batch_size,  4,  4, 256)
-            x = self.conv_bn(x, 128, [4, 4], 2, "valid", None, tf.nn.tanh, bn, "conv4") # (batch_size,  1,  1, 128)
+            x = tf.image.grayscale_to_rgb(x) if x.get_shape()[3] == 1 else x      # (batch_size, 32, 32,   3)
+            x = self.conv_bn(x,  64, [3, 3], 2,  "same", activation, bn, "conv1") # (batch_size, 16, 16,  64)
+            x = self.conv_bn(x, 128, [3, 3], 2,  "same", activation, bn, "conv2") # (batch_size,  8,  8, 128)
+            x = self.conv_bn(x, 256, [3, 3], 2,  "same", activation, bn, "conv3") # (batch_size,  4,  4, 256)
+            x = self.conv_bn(x, 128, [4, 4], 2, "valid", tf.nn.tanh, bn, "conv4") # (batch_size,  1,  1, 128)
             return x
 
-                
-    def g(self, x, bn=True):
+
+    def g(self, x, bn=False, activation=tf.nn.relu):
         with tf.variable_scope("g", reuse=tf.AUTO_REUSE):
-            x = self.conv_t_bn(x, 512, [4, 4], 2, "valid", None, tf.nn.relu,    bn, "conv_t1") # (batch_size,  4,  4, 512)
-            x = self.conv_t_bn(x, 256, [3, 3], 2,  "same", None, tf.nn.relu,    bn, "conv_t2") # (batch_size,  8,  8, 256)
-            x = self.conv_t_bn(x, 128, [3, 3], 2,  "same", None, tf.nn.relu,    bn, "conv_t3") # (batch_size, 16, 16, 128)
-            x = self.conv_t_bn(x,   1, [3, 3], 2,  "same", None, tf.nn.tanh, False, "conv_t4") # (batch_size, 32, 32,   1)
+            x = self.conv_t_bn(x, 512, [4, 4], 2, "valid", activation,    bn, "conv_t1") # (batch_size,  4,  4, 512)
+            x = self.conv_t_bn(x, 256, [3, 3], 2,  "same", activation,    bn, "conv_t2") # (batch_size,  8,  8, 256)
+            x = self.conv_t_bn(x, 128, [3, 3], 2,  "same", activation,    bn, "conv_t3") # (batch_size, 16, 16, 128)
+            x = self.conv_t_bn(x,   1, [3, 3], 2,  "same", tf.nn.tanh, False, "conv_t4") # (batch_size, 32, 32,   1)
             return x
-        
-        
+
+
     def G(self, x):
         return self.g(self.f(x))
 
-    
-    def D(self, x, bn=True):
+
+    def D(self, x, bn=False, activation=tf.nn.relu):
         with tf.variable_scope("D", reuse=tf.AUTO_REUSE):
-            x = self.conv_bn(x, 128, [3, 3], 2,  "same", tf.nn.relu, tf.nn.relu,    bn, "conv1") # (batch_size, 16, 16, 128)
-            x = self.conv_bn(x, 256, [3, 3], 2,  "same",       None, tf.nn.relu,    bn, "conv2") # (batch_size,  8,  8, 256)
-            x = self.conv_bn(x, 512, [3, 3], 2,  "same",       None, tf.nn.relu,    bn, "conv3") # (batch_size,  4,  4, 512)
-            x = self.conv_bn(x,   1, [4, 4], 2, "valid",       None, tf.nn.relu, False, "conv4") # (batch_size,  1,  1,   3)
+            x = self.conv_bn(x, 128, [3, 3], 2,  "same",  activation,    bn, "conv1") # (batch_size, 16, 16, 128)
+            x = self.conv_bn(x, 256, [3, 3], 2,  "same",  activation,    bn, "conv2") # (batch_size,  8,  8, 256)
+            x = self.conv_bn(x, 512, [3, 3], 2,  "same",  activation,    bn, "conv3") # (batch_size,  4,  4, 512)
+            x = self.conv_bn(x,   1, [4, 4], 2, "valid", tf.identity, False, "conv4") # (batch_size,  1,  1,   1)
             x = tf.layers.flatten(x)
             return x
+
+
+    def d(self, x, y):
+        return tf.reduce_mean(tf.square(x - y))
+
+
+    def d2(self, x, y):
+        return tf.reduce_mean(tf.square(x - y))
+
+
+    def tv(self, x):
+        return tf.reduce_mean(tf.image.total_variation(x))
 
 
     def build_f(self):
 
         f_xs = self.f(self.xs)
-        logits = tf.layers.flatten(self.conv_bn(f_xs, 10, [1, 1], 1, "valid", None, tf.identity, False, "logits"))
+        logits = self.conv_bn(f_xs, 10, [1, 1], 1, "valid", tf.identity, False, "logits")
+        logits = tf.layers.flatten(logits)
 
         # loss
         self.loss_auxiliary = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -169,43 +185,56 @@ class DomainTransferNet(object):
     def build_main_model(self):
 
         # source domain
-        f_xs        = self.f(self.xs)
-        self.g_f_xs = self.g(f_xs)
-        D_g_f_xs    = self.D(self.g_f_xs)
-        f_g_f_xs    = self.f(self.g_f_xs)
+        f_xs               = self.f(self.xs)
+        self.g_f_xs        = self.g(f_xs)
+        D_g_f_xs           = self.D(self.g_f_xs)
+        f_g_f_xs           = self.f(self.g_f_xs)
 
         # target domain
-        f_xt     = self.f(self.xt)
-        g_f_xt   = self.g(f_xt)
-        D_g_f_xt = self.D(g_f_xt)
-        D_xt     = self.D(self.xt)
+        f_xt               = self.f(self.xt)
+        g_f_xt             = self.g(f_xt)
+        D_g_f_xt           = self.D(g_f_xt)
+        D_xt               = self.D(self.xt)
+        f_g_f_xt           = self.f(g_f_xt)
 
         # discriminator loss
-        loss_D_g_f_xs = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+        loss_D_g_f_xs      = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
             logits=D_g_f_xs, labels=tf.zeros_like(D_g_f_xs)))
-        loss_D_g_f_xt = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+        loss_D_g_f_xt      = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
             logits=D_g_f_xt, labels=tf.zeros_like(D_g_f_xt)))
-        loss_D_xt     = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+        loss_D_xt          = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
             logits=D_xt, labels=tf.ones_like(D_xt)))
-        self.loss_D_xs   = loss_D_g_f_xs
-        self.loss_D_xt   = loss_D_g_f_xt + loss_D_xt
+        self.loss_D_xs     = loss_D_g_f_xs
+        self.loss_D_xt     = loss_D_g_f_xt + loss_D_xt
 
         # generator loss
         loss_GANG_D_g_f_xs = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
             logits=D_g_f_xs, labels=tf.ones_like(D_g_f_xs)))
         loss_GANG_D_g_f_xt = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
             logits=D_g_f_xt, labels=tf.ones_like(D_g_f_xt)))
-        # loss_GANG          = loss_GANG_D_g_f_xs + loss_GANG_D_g_f_xt
-        loss_CONST         = tf.reduce_mean(tf.square(f_xs - f_g_f_xs))
-        loss_TID           = tf.reduce_mean(tf.square(self.xt - g_f_xt))
-        self.loss_G_xs     = loss_GANG_D_g_f_xs + self.params["loss_const_weight"] * loss_CONST
-        self.loss_G_xt     = loss_GANG_D_g_f_xt + self.params["loss_tid_weight"] * loss_TID
+        loss_CONST_xs      = self.d(f_xs, f_g_f_xs)
+        loss_CONST_xt      = self.d(f_xt, f_g_f_xt)
+        loss_TID           = self.d2(self.xt, g_f_xt)
+        loss_TV_xs         = self.tv(self.g_f_xs)
+        loss_TV_xt         = self.tv(g_f_xt)
+        self.loss_G_xs     = loss_GANG_D_g_f_xs
+        if self.params["loss_const_weight"] > 0:
+            self.loss_G_xs += self.params["loss_const_weight"] * loss_CONST_xs
+        if self.params["loss_tv_weight"] > 0:
+            self.loss_G_xs += self.params["loss_tv_weight"] * loss_TV_xs
+        self.loss_G_xt     = loss_GANG_D_g_f_xt
+        if self.params["loss_const_weight"] > 0:
+            self.loss_G_xt += self.params["loss_const_weight"] * loss_CONST_xt
+        if self.params["loss_tid_weight"] > 0:
+            self.loss_G_xt += self.params["loss_tid_weight"] * loss_TID
+        if self.params["loss_tv_weight"] > 0:
+            self.loss_G_xt += self.params["loss_tv_weight"] * loss_TV_xt
 
         # train op
         t_vars = tf.trainable_variables()
         d_vars = [v for v in t_vars if "D" in v.name]
         g_vars = [v for v in t_vars if "g" in v.name]
-        if self.f_adaptation:
+        if self.f_adaptation_flag:
             g_vars.extend([v for v in t_vars if "f" in v.name])
 
         with tf.variable_scope("xs", reuse=False):
@@ -225,15 +254,15 @@ class DomainTransferNet(object):
                 self.train_op_g_xt = optimizer_g_xt.minimize(self.loss_G_xt, var_list=g_vars)
 
         # summary op
-        summary_loss_D_xs = tf.summary.scalar("loss_D_xs", self.loss_D_xs)
-        summary_loss_G_xs = tf.summary.scalar("loss_G_xs", self.loss_G_xs)
-        summary_xs        = tf.summary.image("xs", self.xs)
-        summary_g_f_xs    = tf.summary.image("g_f_xs", self.g_f_xs)
+        summary_loss_D_xs  = tf.summary.scalar("loss_D_xs", self.loss_D_xs)
+        summary_loss_G_xs  = tf.summary.scalar("loss_G_xs", self.loss_G_xs)
+        summary_xs         = tf.summary.image("xs", self.xs)
+        summary_g_f_xs     = tf.summary.image("g_f_xs", self.g_f_xs)
 
-        summary_loss_D_xt = tf.summary.scalar("loss_D_xt", self.loss_D_xt)
-        summary_loss_G_xt = tf.summary.scalar("loss_G_xt", self.loss_G_xt)
-        summary_xt        = tf.summary.image("xt", self.xt)
-        summary_g_f_xt    = tf.summary.image("g_f_xt", g_f_xt)
+        summary_loss_D_xt  = tf.summary.scalar("loss_D_xt", self.loss_D_xt)
+        summary_loss_G_xt  = tf.summary.scalar("loss_G_xt", self.loss_G_xt)
+        summary_xt         = tf.summary.image("xt", self.xt)
+        summary_g_f_xt     = tf.summary.image("g_f_xt", g_f_xt)
 
         self.summary_op_xs = tf.summary.merge([summary_loss_D_xs, summary_loss_G_xs, summary_xs, summary_g_f_xs])
         self.summary_op_xt = tf.summary.merge([summary_loss_D_xt, summary_loss_G_xt, summary_xt, summary_g_f_xt])
@@ -241,44 +270,56 @@ class DomainTransferNet(object):
 
     def build_main_model_with_flip_gradient(self):
 
-        self.flip_gradient_ = FlipGradientBuilder()
+        self.flip_gradient = FlipGradientBuilder()
 
         # source domain
-        f_xs        = self.f(self.xs)
-        self.g_f_xs = self.g(f_xs)
-        D_g_f_xs    = self.D(self.flip_gradient_(self.g_f_xs))
-        f_g_f_xs    = self.f(self.g_f_xs)
+        f_xs               = self.f(self.xs)
+        self.g_f_xs        = self.g(f_xs)
+        D_g_f_xs           = self.D(self.flip_gradient(self.g_f_xs))
+        f_g_f_xs           = self.f(self.g_f_xs)
 
         # target domain
-        f_xt     = self.f(self.xt)
-        g_f_xt   = self.g(f_xt)
-        D_g_f_xt = self.D(self.flip_gradient_(g_f_xt))
-        D_xt     = self.D(self.xt)
+        f_xt               = self.f(self.xt)
+        g_f_xt             = self.g(f_xt)
+        D_g_f_xt           = self.D(self.flip_gradient(g_f_xt))
+        D_xt               = self.D(self.xt)
+        f_g_f_xt           = self.f(g_f_xt)
 
         # discriminator loss
-        loss_D_g_f_xs = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+        loss_D_g_f_xs      = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
             logits=D_g_f_xs, labels=tf.zeros_like(D_g_f_xs)))
-        loss_D_g_f_xt = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+        loss_D_g_f_xt      = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
             logits=D_g_f_xt, labels=tf.zeros_like(D_g_f_xt)))
-        loss_D_xt     = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+        loss_D_xt          = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
             logits=D_xt, labels=tf.ones_like(D_xt)))
-        self.loss_D_xs   = loss_D_g_f_xs
-        self.loss_D_xt   = loss_D_g_f_xt + loss_D_xt
-        self.loss_D      = self.loss_D_xs + self.loss_D_xt
+        self.loss_D_xs     = loss_D_g_f_xs
+        self.loss_D_xt     = loss_D_g_f_xt + loss_D_xt
+        self.loss_D        = self.loss_D_xs + self.loss_D_xt
 
         # generator loss
         loss_GANG_D_g_f_xs = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
             logits=D_g_f_xs, labels=tf.ones_like(D_g_f_xs)))
         loss_GANG_D_g_f_xt = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
             logits=D_g_f_xt, labels=tf.ones_like(D_g_f_xt)))
-        loss_GANG          = loss_GANG_D_g_f_xs + loss_GANG_D_g_f_xt
         loss_GANG_D_g_f_xs = 0.
         loss_GANG_D_g_f_xt = 0.
-        loss_GANG          = 0.
-        loss_CONST         = tf.reduce_mean(tf.square(f_xs - f_g_f_xs))
-        loss_TID           = tf.reduce_mean(tf.square(self.xt - g_f_xt))
-        self.loss_G_xs     = loss_GANG_D_g_f_xs + self.params["loss_const_weight"] * loss_CONST
-        self.loss_G_xt     = loss_GANG_D_g_f_xt + self.params["loss_tid_weight"] * loss_TID
+        loss_CONST_xs      = self.d(f_xs, f_g_f_xs)
+        loss_CONST_xt      = self.d(f_xt, f_g_f_xt)
+        loss_TID           = self.d2(self.xt, g_f_xt)
+        loss_TV_xs         = self.tv(self.g_f_xs)
+        loss_TV_xt         = self.tv(g_f_xt)
+        self.loss_G_xs     = loss_GANG_D_g_f_xs
+        if self.params["loss_const_weight"] > 0:
+            self.loss_G_xs += self.params["loss_const_weight"] * loss_CONST_xs
+        if self.params["loss_tv_weight"] > 0:
+            self.loss_G_xs += self.params["loss_tv_weight"] * loss_TV_xs
+        self.loss_G_xt     = loss_GANG_D_g_f_xt
+        if self.params["loss_const_weight"] > 0:
+            self.loss_G_xt += self.params["loss_const_weight"] * loss_CONST_xt
+        if self.params["loss_tid_weight"] > 0:
+            self.loss_G_xt += self.params["loss_tid_weight"] * loss_TID
+        if self.params["loss_tv_weight"] > 0:
+            self.loss_G_xt += self.params["loss_tv_weight"] * loss_TV_xt
         self.loss_G        = self.loss_G_xs + self.loss_G_xt
 
         self.loss_G_D      = self.loss_G + self.loss_D
@@ -286,25 +327,25 @@ class DomainTransferNet(object):
         # train op
         t_vars = tf.trainable_variables()
         d_g_vars = [v for v in t_vars if ("D" in v.name) or ("g" in v.name)]
-        if self.f_adaptation:
-            d_g_vars.extend([v for v in t_vars if ("f" in v.name)])
+        if self.f_adaptation_flag:
+            d_g_vars.extend([v for v in t_vars if "f" in v.name])
 
         with tf.variable_scope("all", reuse=False):
             optimizer = tf.train.AdamOptimizer(self.params["learning_rate"])
-            # update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-            # with tf.control_dependencies(update_ops):
-            self.train_op_all = optimizer.minimize(self.loss_G_D, var_list=d_g_vars)
+            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            with tf.control_dependencies(update_ops):
+                self.train_op_all = optimizer.minimize(self.loss_G_D, var_list=d_g_vars)
 
         # summary op
-        summary_loss_D_xs = tf.summary.scalar("loss_D_xs", self.loss_D_xs)
-        summary_loss_G_xs = tf.summary.scalar("loss_G_xs", self.loss_G_xs)
-        summary_xs        = tf.summary.image("xs", self.xs)
-        summary_g_f_xs    = tf.summary.image("g_f_xs", self.g_f_xs)
+        summary_loss_D_xs  = tf.summary.scalar("loss_D_xs", self.loss_D_xs)
+        summary_loss_G_xs  = tf.summary.scalar("loss_G_xs", self.loss_G_xs)
+        summary_xs         = tf.summary.image("xs", self.xs)
+        summary_g_f_xs     = tf.summary.image("g_f_xs", self.g_f_xs)
 
-        summary_loss_D_xt = tf.summary.scalar("loss_D_xt", self.loss_D_xt)
-        summary_loss_G_xt = tf.summary.scalar("loss_G_xt", self.loss_G_xt)
-        summary_xt        = tf.summary.image("xt", self.xt)
-        summary_g_f_xt    = tf.summary.image("g_f_xt", g_f_xt)
+        summary_loss_D_xt  = tf.summary.scalar("loss_D_xt", self.loss_D_xt)
+        summary_loss_G_xt  = tf.summary.scalar("loss_G_xt", self.loss_G_xt)
+        summary_xt         = tf.summary.image("xt", self.xt)
+        summary_g_f_xt     = tf.summary.image("g_f_xt", g_f_xt)
 
         self.summary_op_xs = tf.summary.merge([summary_loss_D_xs, summary_loss_G_xs, summary_xs, summary_g_f_xs])
         self.summary_op_xt = tf.summary.merge([summary_loss_D_xt, summary_loss_G_xt, summary_xt, summary_g_f_xt])
@@ -352,16 +393,13 @@ class DomainTransferNet(object):
                 self.is_training: True,
             }
 
-            if self.flip_gradient:
+            if self.flip_gradient_flag:
                 self.sess.run(self.train_op_all, feed_dict)
             else:
-                self.sess.run(self.train_op_d_xs, feed_dict)
-                self.sess.run(self.train_op_g_xs, feed_dict)
-                self.sess.run(self.train_op_g_xs, feed_dict)
-                self.sess.run(self.train_op_g_xs, feed_dict)
-                self.sess.run(self.train_op_g_xs, feed_dict)
-                self.sess.run(self.train_op_g_xs, feed_dict)
-                self.sess.run(self.train_op_g_xs, feed_dict)
+                for _ in range(self.params["d_update_freq_source"]):
+                    self.sess.run(self.train_op_d_xs, feed_dict)
+                for _ in range(self.params["g_update_freq_source"]):
+                    self.sess.run(self.train_op_g_xs, feed_dict)
 
             if (batch + 1) % self.params["eval_every_num_update"] == 0:
                 op = [self.summary_op_xs, self.loss_D_xs, self.loss_G_xs]
@@ -370,15 +408,14 @@ class DomainTransferNet(object):
                 self.logger.info("[Source] [%d/%d] d_loss: %.6f, g_loss: %.6f" \
                       % (batch + 1, self.params["max_batch"], loss_D_xs, loss_G_xs))
 
-            if self.flip_gradient:
+            if self.flip_gradient_flag:
                 self.sess.run(self.train_op_all, feed_dict)
             else:
-                self.sess.run(self.train_op_d_xt, feed_dict)
-                self.sess.run(self.train_op_d_xt, feed_dict)
-                self.sess.run(self.train_op_g_xt, feed_dict)
-                self.sess.run(self.train_op_g_xt, feed_dict)
-                self.sess.run(self.train_op_g_xt, feed_dict)
-                self.sess.run(self.train_op_g_xt, feed_dict)
+                for _ in range(self.params["d_update_freq_target"]):
+                    self.sess.run(self.train_op_d_xt, feed_dict)
+                for _ in range(self.params["g_update_freq_target"]):
+                    self.sess.run(self.train_op_g_xt, feed_dict)
+
 
             if (batch + 1) % self.params["eval_every_num_update"] == 0:
                 op = [self.summary_op_xt, self.loss_D_xt, self.loss_G_xt]
@@ -403,7 +440,6 @@ class DomainTransferNet(object):
 
     def evaluate(self, Xs, sample_batch, batch_size, sample_dir):
 
-        self.logger.info("start evaluate")
         for i in range(sample_batch):
             xs = Xs[i*batch_size:(i+1)*batch_size]
             feed_dict = {
@@ -416,4 +452,3 @@ class DomainTransferNet(object):
             merged = self.merge_images(xs, g_f_xs, batch_size)
             path = os.path.join(sample_dir, "sample-%d-to-%d.png" %(i*batch_size, (i+1)*batch_size))
             imsave(path, merged)
-            self.logger.info("saved %s" % path)

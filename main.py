@@ -26,10 +26,18 @@ params = {
 
     "loss_const_weight": 15.,
     "loss_tid_weight": 15.,
+    "loss_tv_weight": 0.,
+
+
+    # balance the training of discriminator and generator
+    "d_update_freq_source": 1,
+    "g_update_freq_source": 6,
+    "d_update_freq_target": 2,
+    "g_update_freq_target": 4,
 
 
     "flip_gradient": False,
-    "f_adaptation": True,
+    "f_adaptation": False,
 
 }
 
